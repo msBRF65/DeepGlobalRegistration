@@ -1,0 +1,270 @@
+diff --git a/demo.py b/demo.py
+index 604b5a1..5b94c09 100644
+--- a/demo.py
++++ b/demo.py
+@@ -5,12 +5,21 @@
+ # - Christopher Choy, Jaesik Park, Vladlen Koltun, Fully Convolutional Geometric Features, ICCV 2019
+ # - Christopher Choy, JunYoung Gwak, Silvio Savarese, 4D Spatio-Temporal ConvNets: Minkowski Convolutional Neural Networks, CVPR 2019
+ import os
+-from urllib.request import urlretrieve
++from urllib.request import urlopen
+ 
+ import open3d as o3d
+ from core.deep_global_registration import DeepGlobalRegistration
+ from config import get_config
+ 
++import matplotlib.pyplot as plt
++
++import pfio
++import tempfile
++import contextlib
++from urllib.error import URLError, HTTPError, ContentTooShortError
++from urllib.parse import (splittype)
++from urllib.response import addinfourl, addclosehook
++
+ BASE_URL = "http://node2.chrischoy.org/data/"
+ DOWNLOAD_LIST = [
+     (BASE_URL + "datasets/registration/", "redkitchen_000.ply"),
+@@ -18,12 +27,13 @@ DOWNLOAD_LIST = [
+     (BASE_URL + "projects/DGR/", "ResUNetBN2C-feat32-3dmatch-v0.05.pth")
+ ]
+ 
++_url_tempfiles = []
+ # Check if the weights and file exist and download
+ if not os.path.isfile('redkitchen_000.ply'):
+   print('Downloading weights and pointcloud files...')
+   for f in DOWNLOAD_LIST:
+     print(f"Downloading {f}")
+-    urlretrieve(f[0] + f[1], f[1])
++    urlretrieve_pfio(f[0] + f[1], f[1])
+ 
+ if __name__ == '__main__':
+   config = get_config()
+@@ -31,18 +41,25 @@ if __name__ == '__main__':
+     config.weights = DOWNLOAD_LIST[-1][-1]
+ 
+   # preprocessing
+-  pcd0 = o3d.io.read_point_cloud(config.pcd0)
++  pcd0 = o3d.io.read_point_cloud("/mnt/vol21/i22_msbrf65/data/redkitchen_000.ply")
+   pcd0.estimate_normals()
+-  pcd1 = o3d.io.read_point_cloud(config.pcd1)
++  pcd1 = o3d.io.read_point_cloud("/mnt/vol21/i22_msbrf65/data/redkitchen_001.ply")
+   pcd1.estimate_normals()
+ 
+   # registration
+   dgr = DeepGlobalRegistration(config)
+   T01 = dgr.register(pcd0, pcd1)
+ 
+-  o3d.visualization.draw_geometries([pcd0, pcd1])
++  vis = o3d.visualization.Visualizer()
++  vis.add_geometries([pcd0, pcd1])
++  vis.capture_screen_float_buffer(False)
++  plt.imsave("./before.png")
+ 
+   pcd0.transform(T01)
+   print(T01)
+ 
+   o3d.visualization.draw_geometries([pcd0, pcd1])
++  vis = o3d.visualization.Visualizer()
++  vis.add_geometries([pcd0, pcd1])
++  vis.capture_screen_float_buffer(False)
++  plt.imsave("./after.png")
+\ No newline at end of file
+diff --git a/exec.sh b/exec.sh
+index 84d9e31..182a5bd 100755
+--- a/exec.sh
++++ b/exec.sh
+@@ -1,5 +1,7 @@
+ #!/bin/sh
+-APPDIR=`dirname $0`
+-pip install -r $APPDIR/requirements.txt --user
++git clone https://github.com/pfnet/pfio.git
++cd pfio
++pip install .
++cd ..
+ 
+-python -u demo.py
++python -u /repo/demo.py
+diff --git a/model/pyramidnet.py b/model/pyramidnet.py
+index 8a0b9aa..0a643e3 100644
+--- a/model/pyramidnet.py
++++ b/model/pyramidnet.py
+@@ -15,7 +15,7 @@ from model.residual_block import get_block, conv, conv_tr, conv_norm_non
+ class PyramidModule(ME.MinkowskiNetwork):
+   NONLINEARITY = 'ELU'
+   NORM_TYPE = 'BN'
+-  REGION_TYPE = ME.RegionType.HYPERCUBE
++  REGION_TYPE = ME.RegionType.HYPER_CUBE
+ 
+   def __init__(self,
+                inc,
+@@ -93,7 +93,7 @@ class PyramidNet(ME.MinkowskiNetwork):
+   DEPTHS = [1, 1, 1, 1]
+   # None        b1, b2, b3, btr3, btr2
+   #               1  2  3 -3 -2 -1
+-  REGION_TYPE = ME.RegionType.HYPERCUBE
++  REGION_TYPE = ME.RegionType.HYPER_CUBE
+ 
+   # To use the model, must call initialize_coords before forward pass.
+   # Once data is processed, call clear to reset the model before calling initialize_coords
+diff --git a/model/residual_block.py b/model/residual_block.py
+index f933be5..f8b86b7 100644
+--- a/model/residual_block.py
++++ b/model/residual_block.py
+@@ -22,9 +22,9 @@ def conv(in_channels,
+          dimension=3):
+   if not isinstance(region_type, ME.RegionType):
+     if region_type == 0:
+-      region_type = ME.RegionType.HYPERCUBE
++      region_type = ME.RegionType.HYPER_CUBE
+     elif region_type == 1:
+-      region_type = ME.RegionType.HYPERCROSS
++      region_type = ME.RegionType.HYPER_CROSS
+     else:
+       raise ValueError('Unsupported region type')
+ 
+@@ -50,7 +50,7 @@ def conv_tr(in_channels,
+             stride=1,
+             dilation=1,
+             has_bias=False,
+-            region_type=ME.RegionType.HYPERCUBE,
++            region_type=ME.RegionType.HYPER_CUBE,
+             dimension=-1):
+   assert dimension > 0, 'Dimension must be a positive integer'
+   kernel_generator = ME.KernelGenerator(
+@@ -174,7 +174,7 @@ def conv_norm_non(inc,
+                   stride,
+                   dimension,
+                   bn_momentum=0.05,
+-                  region_type=ME.RegionType.HYPERCUBE,
++                  region_type=ME.RegionType.HYPER_CUBE,
+                   norm_type='BN',
+                   nonlinearity='ELU'):
+   return nn.Sequential(
+diff --git a/model/resunet.py b/model/resunet.py
+index 831517f..79a601a 100644
+--- a/model/resunet.py
++++ b/model/resunet.py
+@@ -18,7 +18,7 @@ class ResUNet(ME.MinkowskiNetwork):
+   BLOCK_NORM_TYPE = 'BN'
+   CHANNELS = [None, 32, 64, 128]
+   TR_CHANNELS = [None, 32, 64, 64]
+-  REGION_TYPE = ME.RegionType.HYPERCUBE
++  REGION_TYPE = ME.RegionType.HYPER_CUBE
+ 
+   # To use the model, must call initialize_coords before forward pass.
+   # Once data is processed, call clear to reset the model before calling initialize_coords
+@@ -202,7 +202,7 @@ class ResUNetBNF(ResUNet):
+ 
+ 
+ class ResUNetBNFX(ResUNetBNF):
+-  REGION_TYPE = ME.RegionType.HYPERCROSS
++  REGION_TYPE = ME.RegionType.HYPER_CROSS
+ 
+ 
+ class ResUNetSP(ME.MinkowskiNetwork):
+@@ -213,7 +213,7 @@ class ResUNetSP(ME.MinkowskiNetwork):
+   # None        b1, b2, b3, btr3, btr2
+   #               1  2  3 -3 -2 -1
+   DEPTHS = [None, 1, 1, 1, 1, 1, None]
+-  REGION_TYPE = ME.RegionType.HYPERCUBE
++  REGION_TYPE = ME.RegionType.HYPER_CUBE
+ 
+   # To use the model, must call initialize_coords before forward pass.
+   # Once data is processed, call clear to reset the model before calling initialize_coords
+@@ -409,7 +409,7 @@ class ResUNetSP(ME.MinkowskiNetwork):
+ 
+ 
+ class ResUNetBNSPC(ResUNetSP):
+-  REGION_TYPE = ME.RegionType.HYPERCROSS
++  REGION_TYPE = ME.RegionType.HYPER_CROSS
+ 
+ 
+ class ResUNetINBNSPC(ResUNetBNSPC):
+@@ -421,7 +421,7 @@ class ResUNet2(ME.MinkowskiNetwork):
+   BLOCK_NORM_TYPE = 'BN'
+   CHANNELS = [None, 32, 64, 128, 256]
+   TR_CHANNELS = [None, 32, 64, 64, 128]
+-  REGION_TYPE = ME.RegionType.HYPERCUBE
++  REGION_TYPE = ME.RegionType.HYPER_CUBE
+ 
+   # To use the model, must call initialize_coords before forward pass.
+   # Once data is processed, call clear to reset the model before calling initialize_coords
+@@ -666,7 +666,7 @@ class ResUNetBN2C(ResUNet2):
+ 
+ 
+ class ResUNetBN2CX(ResUNetBN2C):
+-  REGION_TYPE = ME.RegionType.HYPERCROSS
++  REGION_TYPE = ME.RegionType.HYPER_CROSS
+ 
+ 
+ class ResUNetBN2D(ResUNet2):
+@@ -688,7 +688,7 @@ class ResUNetBN2F(ResUNet2):
+ 
+ 
+ class ResUNetBN2FX(ResUNetBN2F):
+-  REGION_TYPE = ME.RegionType.HYPERCROSS
++  REGION_TYPE = ME.RegionType.HYPER_CROSS
+ 
+ 
+ class ResUNet2v2(ME.MinkowskiNetwork):
+@@ -699,7 +699,7 @@ class ResUNet2v2(ME.MinkowskiNetwork):
+   # None        b1, b2, b3, b4, btr4, btr3, btr2
+   #               1  2  3  4,-4,-3,-2,-1
+   DEPTHS = [None, 1, 1, 1, 1, 1, 1, 1, None]
+-  REGION_TYPE = ME.RegionType.HYPERCUBE
++  REGION_TYPE = ME.RegionType.HYPER_CUBE
+ 
+   # To use the model, must call initialize_coords before forward pass.
+   # Once data is processed, call clear to reset the model before calling initialize_coords
+@@ -977,7 +977,7 @@ class ResUNet2SP(ME.MinkowskiNetwork):
+   BLOCK_NORM_TYPE = 'BN'
+   CHANNELS = [None, 32, 64, 128, 256]
+   TR_CHANNELS = [None, 32, 64, 64, 128]
+-  REGION_TYPE = ME.RegionType.HYPERCUBE
++  REGION_TYPE = ME.RegionType.HYPER_CUBE
+ 
+   # To use the model, must call initialize_coords before forward pass.
+   # Once data is processed, call clear to reset the model before calling initialize_coords
+@@ -1002,7 +1002,7 @@ class ResUNet2SP(ME.MinkowskiNetwork):
+         stride=1,
+         dilation=1,
+         has_bias=False,
+-        region_type=ME.RegionType.HYPERCUBE,
++        region_type=ME.RegionType.HYPER_CUBE,
+         dimension=D)
+     self.norm1 = get_norm(NORM_TYPE, CHANNELS[1], bn_momentum=bn_momentum, dimension=D)
+ 
+@@ -1062,7 +1062,7 @@ class ResUNet2SP(ME.MinkowskiNetwork):
+         stride=1,
+         dilation=1,
+         has_bias=False,
+-        region_type=ME.RegionType.HYPERCUBE,
++        region_type=ME.RegionType.HYPER_CUBE,
+         dimension=D)
+     self.norm4 = get_norm(NORM_TYPE, CHANNELS[4], bn_momentum=bn_momentum, dimension=D)
+ 
+@@ -1071,7 +1071,7 @@ class ResUNet2SP(ME.MinkowskiNetwork):
+         CHANNELS[4],
+         CHANNELS[4],
+         bn_momentum=bn_momentum,
+-        region_type=ME.RegionType.HYPERCUBE,
++        region_type=ME.RegionType.HYPER_CUBE,
+         dimension=D)
+ 
+     self.conv4_tr = conv_tr(
+@@ -1081,7 +1081,7 @@ class ResUNet2SP(ME.MinkowskiNetwork):
+         stride=2,
+         dilation=1,
+         has_bias=False,
+-        region_type=ME.RegionType.HYPERCUBE,
++        region_type=ME.RegionType.HYPER_CUBE,
+         dimension=D)
+     self.norm4_tr = get_norm(
+         NORM_TYPE, TR_CHANNELS[4], bn_momentum=bn_momentum, dimension=D)
+@@ -1218,4 +1218,4 @@ class ResUNetBN2SPC(ResUNet2SP):
+ 
+ 
+ class ResUNetBN2SPCX(ResUNetBN2SPC):
+-  REGION_TYPE = ME.RegionType.HYPERCROSS
++  REGION_TYPE = ME.RegionType.HYPER_CROSS
